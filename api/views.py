@@ -1,29 +1,53 @@
-from rest_framework import viewsets, filters
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import Product
-from .serializers import ProductSerializer
+from rest_framework import viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
+from .models import Product
+from .serializers import ProductSerializer
+
+
+class CustomPagination(PageNumberPagination):
+    page_size = 5
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
 
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
+    pagination_class = CustomPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['in_stock']
+
+    filterset_fields = {
+        'price': ['gte', 'lte', 'exact'],
+        'in_stock': ['exact'],
+    }
+
     search_fields = ['name', 'description']
+
     ordering_fields = ['price', 'created_at']
     ordering = ['-created_at']
 
-    @action(detail=False, methods=['get'])
-    def out_of_stock(self, request):
-        products = self.get_queryset().filter(in_stock=False)
-        serializer = self.get_serializer(products, many=True)
-        return Response(serializer.data)
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
 
-    @action(detail=True, methods=['post'])
-    def mark_in_stock(self, request, pk=None):
-        product = self.get_object()
-        product.in_stock = not product.in_stock
-        product.save()
-        serializer = self.get_serializer(product)
+        data = serializer.data
+        data['extra_info'] = {
+            'message': 'Это дополнительные данные для конкретного продукта',
+            'discount_available': True if instance.price > 1000 else False
+        }
+
+        return Response(data)
+
+    @action(detail=False, methods=['get'])
+    def discounted(self, request):
+        products = self.get_queryset().filter(price__gte=1000)
+        page = self.paginate_queryset(products)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(products, many=True)
         return Response(serializer.data)
